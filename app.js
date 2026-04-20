@@ -8,24 +8,24 @@ let todos         = [];
 let currentFilter = 'all';
 
 // ── DOM refs ──────────────────────────────────────────────
-const authScreen      = document.getElementById('auth-screen');
-const appScreen       = document.getElementById('app-screen');
-const authForm        = document.getElementById('auth-form');
-const authEmail       = document.getElementById('auth-email');
-const authPassword    = document.getElementById('auth-password');
-const authSubmitBtn   = document.getElementById('auth-submit-btn');
-const authMessage     = document.getElementById('auth-message');
-const authTabs        = document.querySelectorAll('.auth-tab');
+const authScreen       = document.getElementById('auth-screen');
+const appScreen        = document.getElementById('app-screen');
+const authForm         = document.getElementById('auth-form');
+const authEmail        = document.getElementById('auth-email');
+const authPassword     = document.getElementById('auth-password');
+const authSubmitBtn    = document.getElementById('auth-submit-btn');
+const authMessage      = document.getElementById('auth-message');
+const authTabs         = document.querySelectorAll('.auth-tab');
 const userEmailDisplay = document.getElementById('user-email-display');
-const logoutBtn       = document.getElementById('logout-btn');
-const todoInput       = document.getElementById('todo-input');
-const addBtn          = document.getElementById('add-btn');
-const list            = document.getElementById('todo-list');
-const remaining       = document.getElementById('remaining');
-const clearBtn        = document.getElementById('clear-btn');
-const filterBtns      = document.querySelectorAll('.filter-btn');
+const logoutBtn        = document.getElementById('logout-btn');
+const todoInput        = document.getElementById('todo-input');
+const addBtn           = document.getElementById('add-btn');
+const list             = document.getElementById('todo-list');
+const remaining        = document.getElementById('remaining');
+const clearBtn         = document.getElementById('clear-btn');
+const filterBtns       = document.querySelectorAll('.filter-btn');
 
-// ── Auth helpers ──────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────
 function apiHeaders(token) {
   return {
     'apikey': SUPABASE_ANON,
@@ -41,10 +41,41 @@ function showMessage(text, type = 'error') {
   authMessage.classList.remove('hidden');
 }
 
-function clearMessage() {
-  authMessage.classList.add('hidden');
+function clearMessage() { authMessage.classList.add('hidden'); }
+
+// ── URL hash parser (e-posta onay callback'i) ─────────────
+function parseHash() {
+  const hash = window.location.hash.slice(1);
+  if (!hash) return null;
+  return Object.fromEntries(
+    hash.split('&').map(p => p.split('=').map(decodeURIComponent))
+  );
 }
 
+async function handleHashCallback(params) {
+  if (!params?.access_token) return false;
+  // URL'den token'ı temizle
+  history.replaceState(null, '', window.location.pathname);
+
+  // Kullanıcı bilgisini al
+  const res  = await fetch(`${AUTH_URL}/user`, {
+    headers: { 'apikey': SUPABASE_ANON, 'Authorization': `Bearer ${params.access_token}` }
+  });
+  const user = await res.json();
+  if (!res.ok) return false;
+
+  saveSession({
+    access_token:  params.access_token,
+    refresh_token: params.refresh_token,
+    token_type:    params.token_type || 'bearer',
+    expires_in:    Number(params.expires_in),
+    expires_at:    Number(params.expires_at),
+    user
+  });
+  return true;
+}
+
+// ── Auth tabs ─────────────────────────────────────────────
 let currentTab = 'login';
 
 authTabs.forEach(tab => {
@@ -61,7 +92,6 @@ authForm.addEventListener('submit', async e => {
   e.preventDefault();
   const email    = authEmail.value.trim();
   const password = authPassword.value;
-
   authSubmitBtn.disabled = true;
   clearMessage();
 
@@ -94,6 +124,7 @@ authForm.addEventListener('submit', async e => {
   }
 });
 
+// ── Session ───────────────────────────────────────────────
 function saveSession(data) {
   session = data;
   localStorage.setItem('sb_session', JSON.stringify(data));
@@ -101,8 +132,7 @@ function saveSession(data) {
 
 function loadSession() {
   const raw = localStorage.getItem('sb_session');
-  if (!raw) return null;
-  return JSON.parse(raw);
+  return raw ? JSON.parse(raw) : null;
 }
 
 function clearSession() {
@@ -128,7 +158,7 @@ async function logout() {
 
 logoutBtn.addEventListener('click', logout);
 
-// ── App ──────────────────────────────────────────────────
+// ── App ───────────────────────────────────────────────────
 function startApp() {
   authScreen.classList.add('hidden');
   appScreen.classList.remove('hidden');
@@ -191,13 +221,13 @@ function startEdit(li, todo) {
   if (li.classList.contains('editing')) return;
   li.classList.add('editing');
 
-  const span = li.querySelector('.todo-text');
+  const span      = li.querySelector('.todo-text');
   const editInput = document.createElement('input');
   editInput.className = 'edit-input';
-  editInput.value = todo.text;
+  editInput.value     = todo.text;
 
   const saveBtn = document.createElement('button');
-  saveBtn.className = 'save-btn';
+  saveBtn.className   = 'save-btn';
   saveBtn.textContent = 'Kaydet';
 
   span.after(editInput);
@@ -208,7 +238,7 @@ function startEdit(li, todo) {
   const save = () => updateTodoText(todo.id, editInput.value);
   saveBtn.addEventListener('click', save);
   editInput.addEventListener('keydown', e => {
-    if (e.key === 'Enter') save();
+    if (e.key === 'Enter')  save();
     if (e.key === 'Escape') fetchTodos();
   });
 }
@@ -275,8 +305,18 @@ filterBtns.forEach(btn => {
 });
 
 // ── Bootstrap ─────────────────────────────────────────────
-const stored = loadSession();
-if (stored?.access_token) {
-  session = stored;
-  startApp();
-}
+(async () => {
+  // Önce e-posta onay linki hash'ini kontrol et
+  const hash = parseHash();
+  if (hash?.access_token) {
+    const ok = await handleHashCallback(hash);
+    if (ok) { startApp(); return; }
+  }
+
+  // Mevcut oturumu yükle
+  const stored = loadSession();
+  if (stored?.access_token) {
+    session = stored;
+    startApp();
+  }
+})();
