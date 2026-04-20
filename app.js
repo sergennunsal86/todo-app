@@ -2,6 +2,9 @@ const SUPABASE_URL  = 'https://fvsrvwfpdplrxsoeenrs.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ2c3J2d2ZwZHBscnhzb2VlbnJzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY2NzQyOTYsImV4cCI6MjA5MjI1MDI5Nn0.mcWh9V29mWFkX0DiJ4rH7uVnPDp0wf4bHtnCBHELbx4';
 const AUTH_URL = `${SUPABASE_URL}/auth/v1`;
 const API      = `${SUPABASE_URL}/rest/v1/todos`;
+const PUSH_API = `${SUPABASE_URL}/rest/v1/push_subscriptions`;
+const INTEGRATIONS_API = `${SUPABASE_URL}/rest/v1/user_integrations`;
+const VAPID_PUBLIC_KEY = 'BGudk1z57su_bqV0NYdmm7aL6gVD02XwaU8CvCcudd4WVppOBF_CzW-9JF_ytMa3P8LjyA5zqu9Y7WLStpzX9CM';
 
 let session       = null;
 let todos         = [];
@@ -125,6 +128,11 @@ async function handleHashCallback(params) {
   saveSession({ access_token: params.access_token, refresh_token: params.refresh_token,
     token_type: params.token_type || 'bearer', expires_in: Number(params.expires_in),
     expires_at: Number(params.expires_at), user });
+  // Google OAuth callback: save provider tokens
+  if (params.provider_token) {
+    // Save after session is set (startApp sets session)
+    window._pendingGoogleToken = { access: params.provider_token, refresh: params.provider_refresh_token };
+  }
   return true;
 }
 
@@ -196,8 +204,15 @@ async function logout() {
 
 logoutBtn.addEventListener('click', logout);
 
-// ── Push Notifications ────────────────────────────────────
-const VAPID_PUBLIC = ''; // Dalga 2'de doldurulacak
+// ── Service Worker + Push Notifications ──────────────────
+let swReg = null;
+
+async function registerSW() {
+  if (!('serviceWorker' in navigator)) return;
+  try {
+    swReg = await navigator.serviceWorker.register('/todo-app/sw.js');
+  } catch (e) { console.warn('SW register failed', e); }
+}
 
 function initNotifyBtn() {
   if (!('Notification' in window) || !('serviceWorker' in navigator)) return;
@@ -209,12 +224,78 @@ function initNotifyBtn() {
   notifyBtn.addEventListener('click', requestPushPermission);
 }
 
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+
 async function requestPushPermission() {
   const perm = await Notification.requestPermission();
-  if (perm === 'granted') {
-    notifyBtn.classList.add('enabled');
-    notifyBtn.title = 'Bildirimler açık';
-  }
+  if (perm !== 'granted') return;
+  notifyBtn.classList.add('enabled');
+  notifyBtn.title = 'Bildirimler açık';
+
+  try {
+    if (!swReg) swReg = await navigator.serviceWorker.ready;
+    const sub = await swReg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+    });
+    const subJson = sub.toJSON();
+    await fetch(PUSH_API, {
+      method: 'POST',
+      headers: { ...apiHeaders(session.access_token), 'Prefer': 'resolution=merge-duplicates' },
+      body: JSON.stringify({
+        user_id: session.user.id,
+        endpoint: subJson.endpoint,
+        p256dh:   subJson.keys?.p256dh   ?? '',
+        auth:     subJson.keys?.auth     ?? '',
+      }),
+    });
+  } catch (e) { console.warn('Push subscribe failed', e); }
+}
+
+// ── Google Calendar ───────────────────────────────────────
+async function linkGoogleCalendar() {
+  const { data, error } = await fetch(`${AUTH_URL}/authorize?provider=google&scopes=${encodeURIComponent('email profile https://www.googleapis.com/auth/calendar.events')}&redirect_to=${encodeURIComponent(window.location.origin + '/todo-app/')}&access_type=offline&prompt=consent`, {
+    method: 'GET', headers: { apikey: SUPABASE_ANON }
+  }).then(r => r.json()).catch(() => ({ data: null, error: 'fetch failed' }));
+
+  // Supabase JS SDK flow: redirect to Google OAuth
+  const url = `${AUTH_URL}/authorize?provider=google&scopes=${encodeURIComponent('email profile https://www.googleapis.com/auth/calendar.events')}&redirect_to=${encodeURIComponent(window.location.origin + '/todo-app/')}&query_params=${encodeURIComponent('access_type=offline&prompt=consent')}`;
+  window.location.href = url;
+}
+
+async function saveGoogleTokens(providerToken, providerRefreshToken) {
+  if (!providerToken) return;
+  await fetch(INTEGRATIONS_API, {
+    method: 'POST',
+    headers: { ...apiHeaders(session.access_token), 'Prefer': 'resolution=merge-duplicates' },
+    body: JSON.stringify({
+      user_id: session.user.id,
+      google_access_token: providerToken,
+      google_refresh_token: providerRefreshToken || null,
+      google_expires_at: new Date(Date.now() + 3600000).toISOString(),
+    }),
+  });
+}
+
+async function syncToCalendar(todoId, action) {
+  await fetch(`${SUPABASE_URL}/functions/v1/sync-to-calendar`, {
+    method: 'POST',
+    headers: { ...apiHeaders(session.access_token), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ todo_id: todoId, action }),
+  }).catch(() => {});
+}
+
+async function hasGoogleCalendar() {
+  const res = await fetch(`${INTEGRATIONS_API}?user_id=eq.${session.user.id}&select=google_access_token`, {
+    headers: apiHeaders(session.access_token),
+  });
+  const data = await res.json();
+  return Array.isArray(data) && data.length > 0 && !!data[0].google_access_token;
 }
 
 // ── App ───────────────────────────────────────────────────
@@ -222,9 +303,32 @@ function startApp() {
   authScreen.classList.add('hidden');
   appScreen.classList.remove('hidden');
   userEmailDisplay.textContent = session.user?.email || '';
+  registerSW();
   initNotifyBtn();
+  initGoogleBtn();
   fetchTodos();
-  setInterval(() => render(), 60000); // kalan süre her dakika güncellenir
+  setInterval(() => render(), 60000);
+}
+
+function initGoogleBtn() {
+  const gcalBtn = document.getElementById('gcal-btn');
+  if (!gcalBtn) return;
+  // Save pending Google tokens from OAuth callback
+  if (window._pendingGoogleToken) {
+    saveGoogleTokens(window._pendingGoogleToken.access, window._pendingGoogleToken.refresh);
+    window._pendingGoogleToken = null;
+  }
+  hasGoogleCalendar().then(linked => {
+    gcalBtn.classList.remove('hidden');
+    if (linked) {
+      gcalBtn.classList.add('enabled');
+      gcalBtn.title = 'Google Calendar bağlı';
+      gcalBtn.textContent = '📅';
+    }
+  });
+  gcalBtn.addEventListener('click', () => {
+    if (!gcalBtn.classList.contains('enabled')) linkGoogleCalendar();
+  });
 }
 
 async function fetchTodos() {
@@ -240,11 +344,13 @@ async function addTodo() {
   const due    = todoDue.value ? new Date(todoDue.value).toISOString() : null;
   const remind = todoRemind.value ? Number(todoRemind.value) : null;
   todoInput.value = ''; todoDue.value = ''; todoRemind.value = '';
-  await fetch(API, {
+  const res = await fetch(API, {
     method: 'POST',
     headers: apiHeaders(session.access_token),
     body: JSON.stringify({ text, done: false, user_id: session.user.id, due_at: due, remind_before_minutes: remind })
   });
+  const [created] = await res.json();
+  if (created?.id && due) syncToCalendar(created.id, 'create');
   await fetchTodos();
 }
 
@@ -256,6 +362,7 @@ async function toggleTodo(id, done) {
 }
 
 async function deleteTodo(id) {
+  syncToCalendar(id, 'delete');
   await fetch(`${API}?id=eq.${id}`, { method: 'DELETE', headers: apiHeaders(session.access_token) });
   await fetchTodos();
 }
@@ -297,6 +404,7 @@ modalSaveBtn.addEventListener('click', async () => {
     body: JSON.stringify({ text, due_at: due, remind_before_minutes: remind,
       reminded_email: false, reminded_push: false })
   });
+  if (due) syncToCalendar(editingId, 'update');
   closeModal();
   await fetchTodos();
 });
