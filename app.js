@@ -71,7 +71,9 @@ function escapeHtml(str) {
 }
 
 function startEdit(li, todo) {
+  if (li.classList.contains('editing')) return;
   li.classList.add('editing');
+
   const span = li.querySelector('.todo-text');
 
   const editInput = document.createElement('input');
@@ -88,11 +90,12 @@ function startEdit(li, todo) {
   editInput.select();
 
   const save = () => updateTodoText(todo.id, editInput.value);
+  const cancel = () => fetchTodos();
 
   saveBtn.addEventListener('click', save);
   editInput.addEventListener('keydown', e => {
     if (e.key === 'Enter') save();
-    if (e.key === 'Escape') fetchTodos();
+    if (e.key === 'Escape') cancel();
   });
 }
 
@@ -107,42 +110,45 @@ function render() {
 
   if (filtered.length === 0) {
     list.innerHTML = '<p class="empty-msg">Görev yok.</p>';
-  } else {
-    filtered.forEach(todo => {
-      const li = document.createElement('li');
-      li.className = 'todo-item' + (todo.done ? ' completed' : '');
-      li.innerHTML = `
-        <input class="todo-checkbox" type="checkbox" ${todo.done ? 'checked' : ''} data-id="${todo.id}" />
-        <span class="todo-text">${escapeHtml(todo.text)}</span>
-        <button class="edit-btn" data-id="${todo.id}" title="Düzenle">&#x270E;</button>
-        <button class="delete-btn" data-id="${todo.id}" title="Sil">&#x2715;</button>
-      `;
-      list.appendChild(li);
-    });
+    const activeCount = todos.filter(t => !t.done).length;
+    remaining.textContent = `${activeCount} görev kaldı`;
+    return;
   }
+
+  filtered.forEach(todo => {
+    const li = document.createElement('li');
+    li.className = 'todo-item' + (todo.done ? ' completed' : '');
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'todo-checkbox';
+    checkbox.checked = todo.done;
+    checkbox.addEventListener('change', () => toggleTodo(todo.id, checkbox.checked));
+
+    const span = document.createElement('span');
+    span.className = 'todo-text';
+    span.textContent = todo.text;
+    span.addEventListener('dblclick', () => startEdit(li, todo));
+
+    const editBtn = document.createElement('button');
+    editBtn.className = 'edit-btn';
+    editBtn.title = 'Düzenle';
+    editBtn.innerHTML = '&#x270E;';
+    editBtn.addEventListener('click', () => startEdit(li, todo));
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'delete-btn';
+    deleteBtn.title = 'Sil';
+    deleteBtn.innerHTML = '&#x2715;';
+    deleteBtn.addEventListener('click', () => deleteTodo(todo.id));
+
+    li.append(checkbox, span, editBtn, deleteBtn);
+    list.appendChild(li);
+  });
 
   const activeCount = todos.filter(t => !t.done).length;
   remaining.textContent = `${activeCount} görev kaldı`;
 }
-
-list.addEventListener('change', e => {
-  if (e.target.classList.contains('todo-checkbox')) {
-    const id = Number(e.target.dataset.id);
-    toggleTodo(id, e.target.checked);
-  }
-});
-
-list.addEventListener('click', e => {
-  if (e.target.classList.contains('delete-btn')) {
-    deleteTodo(Number(e.target.dataset.id));
-  }
-  if (e.target.classList.contains('edit-btn')) {
-    const id = Number(e.target.dataset.id);
-    const todo = todos.find(t => t.id === id);
-    const li = e.target.closest('.todo-item');
-    if (todo && li && !li.classList.contains('editing')) startEdit(li, todo);
-  }
-});
 
 addBtn.addEventListener('click', addTodo);
 input.addEventListener('keydown', e => { if (e.key === 'Enter') addTodo(); });
