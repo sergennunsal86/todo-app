@@ -146,11 +146,10 @@ h1 {
   word-break: break-word;
 }
 
-.delete-btn {
+.edit-btn, .delete-btn {
   background: none;
   border: none;
-  color: #e94560;
-  font-size: 18px;
+  font-size: 16px;
   cursor: pointer;
   padding: 2px 6px;
   border-radius: 6px;
@@ -159,8 +158,52 @@ h1 {
   flex-shrink: 0;
 }
 
+.edit-btn {
+  color: #4ea8de;
+}
+
+.edit-btn:hover {
+  background: rgba(78, 168, 222, 0.15);
+}
+
+.delete-btn {
+  color: #e94560;
+}
+
 .delete-btn:hover {
   background: rgba(233, 69, 96, 0.15);
+}
+
+.todo-item.editing .todo-text {
+  display: none;
+}
+
+.edit-input {
+  flex: 1;
+  padding: 4px 10px;
+  border: 2px solid #4ea8de;
+  border-radius: 8px;
+  background: #16213e;
+  color: #eee;
+  font-size: 15px;
+  outline: none;
+}
+
+.save-btn {
+  background: #4ea8de;
+  border: none;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+
+.save-btn:hover {
+  background: #3a8fc4;
 }
 
 .footer {

@@ -46,6 +46,16 @@ async function toggleTodo(id, done) {
   await fetchTodos();
 }
 
+async function updateTodoText(id, text) {
+  if (!text.trim()) return;
+  await fetch(`${API}?id=eq.${id}`, {
+    method: 'PATCH',
+    headers: HEADERS,
+    body: JSON.stringify({ text: text.trim() })
+  });
+  await fetchTodos();
+}
+
 async function deleteTodo(id) {
   await fetch(`${API}?id=eq.${id}`, { method: 'DELETE', headers: HEADERS });
   await fetchTodos();
@@ -58,6 +68,32 @@ async function clearCompleted() {
 
 function escapeHtml(str) {
   return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function startEdit(li, todo) {
+  li.classList.add('editing');
+  const span = li.querySelector('.todo-text');
+
+  const editInput = document.createElement('input');
+  editInput.className = 'edit-input';
+  editInput.value = todo.text;
+
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'save-btn';
+  saveBtn.textContent = 'Kaydet';
+
+  span.after(editInput);
+  editInput.after(saveBtn);
+  editInput.focus();
+  editInput.select();
+
+  const save = () => updateTodoText(todo.id, editInput.value);
+
+  saveBtn.addEventListener('click', save);
+  editInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') save();
+    if (e.key === 'Escape') fetchTodos();
+  });
 }
 
 function render() {
@@ -78,6 +114,7 @@ function render() {
       li.innerHTML = `
         <input class="todo-checkbox" type="checkbox" ${todo.done ? 'checked' : ''} data-id="${todo.id}" />
         <span class="todo-text">${escapeHtml(todo.text)}</span>
+        <button class="edit-btn" data-id="${todo.id}" title="Düzenle">&#x270E;</button>
         <button class="delete-btn" data-id="${todo.id}" title="Sil">&#x2715;</button>
       `;
       list.appendChild(li);
@@ -98,6 +135,12 @@ list.addEventListener('change', e => {
 list.addEventListener('click', e => {
   if (e.target.classList.contains('delete-btn')) {
     deleteTodo(Number(e.target.dataset.id));
+  }
+  if (e.target.classList.contains('edit-btn')) {
+    const id = Number(e.target.dataset.id);
+    const todo = todos.find(t => t.id === id);
+    const li = e.target.closest('.todo-item');
+    if (todo && li && !li.classList.contains('editing')) startEdit(li, todo);
   }
 });
 
