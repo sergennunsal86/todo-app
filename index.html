@@ -7,25 +7,55 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div class="container">
-    <h1>Yapılacaklar</h1>
 
-    <div class="input-area">
-      <input type="text" id="todo-input" placeholder="Yeni görev ekle..." />
-      <button id="add-btn">Ekle</button>
+  <!-- Auth Ekranı -->
+  <div id="auth-screen" class="auth-screen">
+    <div class="auth-card">
+      <h1>Yapılacaklar</h1>
+
+      <div class="auth-tabs">
+        <button class="auth-tab active" data-tab="login">Giriş Yap</button>
+        <button class="auth-tab" data-tab="register">Kayıt Ol</button>
+      </div>
+
+      <div id="auth-message" class="auth-message hidden"></div>
+
+      <form id="auth-form">
+        <input type="email" id="auth-email" placeholder="E-posta" required />
+        <input type="password" id="auth-password" placeholder="Şifre (min. 6 karakter)" required minlength="6" />
+        <button type="submit" id="auth-submit-btn">Giriş Yap</button>
+      </form>
     </div>
+  </div>
 
-    <div class="filters">
-      <button class="filter-btn active" data-filter="all">Tümü</button>
-      <button class="filter-btn" data-filter="active">Aktif</button>
-      <button class="filter-btn" data-filter="completed">Tamamlanan</button>
-    </div>
+  <!-- Uygulama -->
+  <div id="app-screen" class="hidden">
+    <div class="container">
+      <div class="app-header">
+        <h1>Yapılacaklar</h1>
+        <div class="user-info">
+          <span id="user-email-display"></span>
+          <button id="logout-btn">Çıkış</button>
+        </div>
+      </div>
 
-    <ul id="todo-list"></ul>
+      <div class="input-area">
+        <input type="text" id="todo-input" placeholder="Yeni görev ekle..." />
+        <button id="add-btn">Ekle</button>
+      </div>
 
-    <div class="footer">
-      <span id="remaining">0 görev kaldı</span>
-      <button id="clear-btn">Tamamlananları Sil</button>
+      <div class="filters">
+        <button class="filter-btn active" data-filter="all">Tümü</button>
+        <button class="filter-btn" data-filter="active">Aktif</button>
+        <button class="filter-btn" data-filter="completed">Tamamlanan</button>
+      </div>
+
+      <ul id="todo-list"></ul>
+
+      <div class="footer">
+        <span id="remaining">0 görev kaldı</span>
+        <button id="clear-btn">Tamamlananları Sil</button>
+      </div>
     </div>
   </div>
 
