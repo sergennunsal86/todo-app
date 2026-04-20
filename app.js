@@ -258,13 +258,10 @@ async function requestPushPermission() {
 }
 
 // ── Google Calendar ───────────────────────────────────────
-async function linkGoogleCalendar() {
-  const { data, error } = await fetch(`${AUTH_URL}/authorize?provider=google&scopes=${encodeURIComponent('email profile https://www.googleapis.com/auth/calendar.events')}&redirect_to=${encodeURIComponent(window.location.origin + '/todo-app/')}&access_type=offline&prompt=consent`, {
-    method: 'GET', headers: { apikey: SUPABASE_ANON }
-  }).then(r => r.json()).catch(() => ({ data: null, error: 'fetch failed' }));
-
-  // Supabase JS SDK flow: redirect to Google OAuth
-  const url = `${AUTH_URL}/authorize?provider=google&scopes=${encodeURIComponent('email profile https://www.googleapis.com/auth/calendar.events')}&redirect_to=${encodeURIComponent(window.location.origin + '/todo-app/')}&query_params=${encodeURIComponent('access_type=offline&prompt=consent')}`;
+function linkGoogleCalendar() {
+  const scopes = encodeURIComponent('email profile https://www.googleapis.com/auth/calendar.events');
+  const redirectTo = encodeURIComponent(window.location.origin + '/todo-app/');
+  const url = `${AUTH_URL}/authorize?provider=google&scopes=${scopes}&redirect_to=${redirectTo}&access_type=offline&prompt=consent`;
   window.location.href = url;
 }
 
