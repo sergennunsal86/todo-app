@@ -1,11 +1,12 @@
 const SUPABASE_URL  = 'https://fvsrvwfpdplrxsoeenrs.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ2c3J2d2ZwZHBscnhzb2VlbnJzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY2NzQyOTYsImV4cCI6MjA5MjI1MDI5Nn0.mcWh9V29mWFkX0DiJ4rH7uVnPDp0wf4bHtnCBHELbx4';
-const AUTH_URL      = `${SUPABASE_URL}/auth/v1`;
-const API           = `${SUPABASE_URL}/rest/v1/todos`;
+const AUTH_URL = `${SUPABASE_URL}/auth/v1`;
+const API      = `${SUPABASE_URL}/rest/v1/todos`;
 
 let session       = null;
 let todos         = [];
 let currentFilter = 'all';
+let editingId     = null;
 
 // ── DOM refs ──────────────────────────────────────────────
 const authScreen       = document.getElementById('auth-screen');
@@ -17,13 +18,22 @@ const authSubmitBtn    = document.getElementById('auth-submit-btn');
 const authMessage      = document.getElementById('auth-message');
 const authTabs         = document.querySelectorAll('.auth-tab');
 const userEmailDisplay = document.getElementById('user-email-display');
+const notifyBtn        = document.getElementById('notify-btn');
 const logoutBtn        = document.getElementById('logout-btn');
 const todoInput        = document.getElementById('todo-input');
+const todoDue          = document.getElementById('todo-due');
+const todoRemind       = document.getElementById('todo-remind');
 const addBtn           = document.getElementById('add-btn');
 const list             = document.getElementById('todo-list');
 const remaining        = document.getElementById('remaining');
 const clearBtn         = document.getElementById('clear-btn');
 const filterBtns       = document.querySelectorAll('.filter-btn');
+const editModal        = document.getElementById('edit-modal');
+const modalText        = document.getElementById('modal-text');
+const modalDue         = document.getElementById('modal-due');
+const modalRemind      = document.getElementById('modal-remind');
+const modalSaveBtn     = document.getElementById('modal-save-btn');
+const modalCancelBtn   = document.getElementById('modal-cancel-btn');
 
 // ── Helpers ───────────────────────────────────────────────
 function apiHeaders(token) {
@@ -43,39 +53,81 @@ function showMessage(text, type = 'error') {
 
 function clearMessage() { authMessage.classList.add('hidden'); }
 
-// ── URL hash parser (e-posta onay callback'i) ─────────────
+// ── Due date helpers ──────────────────────────────────────
+function dueBadge(dueAt) {
+  if (!dueAt) return null;
+  const diff = new Date(dueAt) - new Date();
+  const abs  = Math.abs(diff);
+  const mins = Math.floor(abs / 60000);
+  const hrs  = Math.floor(abs / 3600000);
+  const days = Math.floor(abs / 86400000);
+
+  if (diff < 0) return { label: 'Gecikti', cls: 'overdue' };
+  if (diff < 3600000)   return { label: `${mins} dk kaldı`,  cls: 'soon' };
+  if (diff < 86400000)  return { label: `${hrs} saat kaldı`, cls: hrs < 3 ? 'soon' : 'ok' };
+  return { label: `${days} gün kaldı`, cls: 'ok' };
+}
+
+function remindLabel(mins) {
+  if (!mins) return null;
+  if (mins < 60)   return `${mins} dk önce`;
+  if (mins < 1440) return `${mins / 60} saat önce`;
+  if (mins < 10080) return `${mins / 1440} gün önce`;
+  return `${mins / 10080} hafta önce`;
+}
+
+function toDatetimeLocal(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// ── .ics export ───────────────────────────────────────────
+function downloadIcs(todo) {
+  const start = new Date(todo.due_at);
+  const end   = new Date(start.getTime() + 60 * 60000);
+  const fmt   = d => d.toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z';
+  const lines = [
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Todo App//TR',
+    'BEGIN:VEVENT',
+    `UID:${todo.id}@todo-app`,
+    `DTSTART:${fmt(start)}`,
+    `DTEND:${fmt(end)}`,
+    `SUMMARY:${todo.text}`,
+    ...(todo.remind_before_minutes
+      ? [`BEGIN:VALARM`, `TRIGGER:-PT${todo.remind_before_minutes}M`, `ACTION:DISPLAY`, `DESCRIPTION:Hatırlatma`, `END:VALARM`]
+      : []),
+    'END:VEVENT', 'END:VCALENDAR'
+  ];
+  const blob = new Blob([lines.join('\r\n')], { type: 'text/calendar' });
+  const a    = document.createElement('a');
+  a.href     = URL.createObjectURL(blob);
+  a.download = `${todo.text.slice(0, 30)}.ics`;
+  a.click();
+}
+
+// ── Auth ──────────────────────────────────────────────────
 function parseHash() {
   const hash = window.location.hash.slice(1);
   if (!hash) return null;
-  return Object.fromEntries(
-    hash.split('&').map(p => p.split('=').map(decodeURIComponent))
-  );
+  return Object.fromEntries(hash.split('&').map(p => p.split('=').map(decodeURIComponent)));
 }
 
 async function handleHashCallback(params) {
   if (!params?.access_token) return false;
-  // URL'den token'ı temizle
   history.replaceState(null, '', window.location.pathname);
-
-  // Kullanıcı bilgisini al
   const res  = await fetch(`${AUTH_URL}/user`, {
     headers: { 'apikey': SUPABASE_ANON, 'Authorization': `Bearer ${params.access_token}` }
   });
   const user = await res.json();
   if (!res.ok) return false;
-
-  saveSession({
-    access_token:  params.access_token,
-    refresh_token: params.refresh_token,
-    token_type:    params.token_type || 'bearer',
-    expires_in:    Number(params.expires_in),
-    expires_at:    Number(params.expires_at),
-    user
-  });
+  saveSession({ access_token: params.access_token, refresh_token: params.refresh_token,
+    token_type: params.token_type || 'bearer', expires_in: Number(params.expires_in),
+    expires_at: Number(params.expires_at), user });
   return true;
 }
 
-// ── Auth tabs ─────────────────────────────────────────────
 let currentTab = 'login';
 
 authTabs.forEach(tab => {
@@ -90,11 +142,9 @@ authTabs.forEach(tab => {
 
 authForm.addEventListener('submit', async e => {
   e.preventDefault();
-  const email    = authEmail.value.trim();
-  const password = authPassword.value;
+  const email = authEmail.value.trim(), password = authPassword.value;
   authSubmitBtn.disabled = true;
   clearMessage();
-
   try {
     if (currentTab === 'register') {
       const res  = await fetch(`${AUTH_URL}/signup`, {
@@ -117,14 +167,10 @@ authForm.addEventListener('submit', async e => {
       saveSession(data);
       startApp();
     }
-  } catch {
-    showMessage('Bağlantı hatası, lütfen tekrar deneyin.');
-  } finally {
-    authSubmitBtn.disabled = false;
-  }
+  } catch { showMessage('Bağlantı hatası, lütfen tekrar deneyin.'); }
+  finally   { authSubmitBtn.disabled = false; }
 });
 
-// ── Session ───────────────────────────────────────────────
 function saveSession(data) {
   session = data;
   localStorage.setItem('sb_session', JSON.stringify(data));
@@ -135,71 +181,76 @@ function loadSession() {
   return raw ? JSON.parse(raw) : null;
 }
 
-function clearSession() {
-  session = null;
-  localStorage.removeItem('sb_session');
-}
+function clearSession() { session = null; localStorage.removeItem('sb_session'); }
 
 async function logout() {
   if (session?.access_token) {
-    await fetch(`${AUTH_URL}/logout`, {
-      method: 'POST',
-      headers: apiHeaders(session.access_token)
-    }).catch(() => {});
+    await fetch(`${AUTH_URL}/logout`, { method: 'POST', headers: apiHeaders(session.access_token) }).catch(() => {});
   }
   clearSession();
   todos = [];
   appScreen.classList.add('hidden');
   authScreen.classList.remove('hidden');
-  authEmail.value = '';
-  authPassword.value = '';
-  clearMessage();
+  authEmail.value = ''; authPassword.value = ''; clearMessage();
 }
 
 logoutBtn.addEventListener('click', logout);
+
+// ── Push Notifications ────────────────────────────────────
+const VAPID_PUBLIC = ''; // Dalga 2'de doldurulacak
+
+function initNotifyBtn() {
+  if (!('Notification' in window) || !('serviceWorker' in navigator)) return;
+  notifyBtn.classList.remove('hidden');
+  if (Notification.permission === 'granted') {
+    notifyBtn.classList.add('enabled');
+    notifyBtn.title = 'Bildirimler açık';
+  }
+  notifyBtn.addEventListener('click', requestPushPermission);
+}
+
+async function requestPushPermission() {
+  const perm = await Notification.requestPermission();
+  if (perm === 'granted') {
+    notifyBtn.classList.add('enabled');
+    notifyBtn.title = 'Bildirimler açık';
+  }
+}
 
 // ── App ───────────────────────────────────────────────────
 function startApp() {
   authScreen.classList.add('hidden');
   appScreen.classList.remove('hidden');
   userEmailDisplay.textContent = session.user?.email || '';
+  initNotifyBtn();
   fetchTodos();
+  setInterval(() => render(), 60000); // kalan süre her dakika güncellenir
 }
 
 async function fetchTodos() {
   const res = await fetch(`${API}?order=created_at.desc`, { headers: apiHeaders(session.access_token) });
-  todos = await res.json();
-  if (!Array.isArray(todos)) todos = [];
+  const data = await res.json();
+  todos = Array.isArray(data) ? data : [];
   render();
 }
 
 async function addTodo() {
   const text = todoInput.value.trim();
   if (!text) return;
-  todoInput.value = '';
+  const due    = todoDue.value ? new Date(todoDue.value).toISOString() : null;
+  const remind = todoRemind.value ? Number(todoRemind.value) : null;
+  todoInput.value = ''; todoDue.value = ''; todoRemind.value = '';
   await fetch(API, {
     method: 'POST',
     headers: apiHeaders(session.access_token),
-    body: JSON.stringify({ text, done: false, user_id: session.user.id })
+    body: JSON.stringify({ text, done: false, user_id: session.user.id, due_at: due, remind_before_minutes: remind })
   });
   await fetchTodos();
 }
 
 async function toggleTodo(id, done) {
   await fetch(`${API}?id=eq.${id}`, {
-    method: 'PATCH',
-    headers: apiHeaders(session.access_token),
-    body: JSON.stringify({ done })
-  });
-  await fetchTodos();
-}
-
-async function updateTodoText(id, text) {
-  if (!text.trim()) return;
-  await fetch(`${API}?id=eq.${id}`, {
-    method: 'PATCH',
-    headers: apiHeaders(session.access_token),
-    body: JSON.stringify({ text: text.trim() })
+    method: 'PATCH', headers: apiHeaders(session.access_token), body: JSON.stringify({ done })
   });
   await fetchTodos();
 }
@@ -211,42 +262,51 @@ async function deleteTodo(id) {
 
 async function clearCompleted() {
   await fetch(`${API}?done=eq.true&user_id=eq.${session.user.id}`, {
-    method: 'DELETE',
-    headers: apiHeaders(session.access_token)
+    method: 'DELETE', headers: apiHeaders(session.access_token)
   });
   await fetchTodos();
 }
 
-function startEdit(li, todo) {
-  if (li.classList.contains('editing')) return;
-  li.classList.add('editing');
-
-  const span      = li.querySelector('.todo-text');
-  const editInput = document.createElement('input');
-  editInput.className = 'edit-input';
-  editInput.value     = todo.text;
-
-  const saveBtn = document.createElement('button');
-  saveBtn.className   = 'save-btn';
-  saveBtn.textContent = 'Kaydet';
-
-  span.after(editInput);
-  editInput.after(saveBtn);
-  editInput.focus();
-  editInput.select();
-
-  const save = () => updateTodoText(todo.id, editInput.value);
-  saveBtn.addEventListener('click', save);
-  editInput.addEventListener('keydown', e => {
-    if (e.key === 'Enter')  save();
-    if (e.key === 'Escape') fetchTodos();
-  });
+// ── Edit Modal ────────────────────────────────────────────
+function openModal(todo) {
+  editingId         = todo.id;
+  modalText.value   = todo.text;
+  modalDue.value    = toDatetimeLocal(todo.due_at);
+  modalRemind.value = todo.remind_before_minutes || '';
+  editModal.classList.remove('hidden');
+  modalText.focus();
 }
 
+function closeModal() {
+  editModal.classList.add('hidden');
+  editingId = null;
+}
+
+modalCancelBtn.addEventListener('click', closeModal);
+editModal.addEventListener('click', e => { if (e.target === editModal) closeModal(); });
+
+modalSaveBtn.addEventListener('click', async () => {
+  if (!editingId) return;
+  const text   = modalText.value.trim();
+  if (!text) return;
+  const due    = modalDue.value ? new Date(modalDue.value).toISOString() : null;
+  const remind = modalRemind.value ? Number(modalRemind.value) : null;
+  await fetch(`${API}?id=eq.${editingId}`, {
+    method: 'PATCH',
+    headers: apiHeaders(session.access_token),
+    body: JSON.stringify({ text, due_at: due, remind_before_minutes: remind,
+      reminded_email: false, reminded_push: false })
+  });
+  closeModal();
+  await fetchTodos();
+});
+
+// ── Render ────────────────────────────────────────────────
 function render() {
   const filtered = todos.filter(t => {
     if (currentFilter === 'active')    return !t.done;
     if (currentFilter === 'completed') return t.done;
+    if (currentFilter === 'upcoming')  return !t.done && t.due_at && new Date(t.due_at) > new Date();
     return true;
   });
 
@@ -256,33 +316,74 @@ function render() {
     list.innerHTML = '<p class="empty-msg">Görev yok.</p>';
   } else {
     filtered.forEach(todo => {
+      const badge = dueBadge(todo.due_at);
+      const isOverdue = badge?.cls === 'overdue';
+      const isSoon    = badge?.cls === 'soon';
+
       const li = document.createElement('li');
-      li.className = 'todo-item' + (todo.done ? ' completed' : '');
+      li.className = 'todo-item'
+        + (todo.done      ? ' completed' : '')
+        + (isOverdue && !todo.done ? ' overdue'  : '')
+        + (isSoon    && !todo.done ? ' due-soon' : '');
 
       const checkbox = document.createElement('input');
-      checkbox.type      = 'checkbox';
-      checkbox.className = 'todo-checkbox';
-      checkbox.checked   = todo.done;
+      checkbox.type = 'checkbox'; checkbox.className = 'todo-checkbox'; checkbox.checked = todo.done;
       checkbox.addEventListener('change', () => toggleTodo(todo.id, checkbox.checked));
 
+      const body = document.createElement('div');
+      body.className = 'todo-body';
+
       const span = document.createElement('span');
-      span.className   = 'todo-text';
-      span.textContent = todo.text;
-      span.addEventListener('dblclick', () => startEdit(li, todo));
+      span.className = 'todo-text'; span.textContent = todo.text;
+
+      const meta = document.createElement('div');
+      meta.className = 'todo-meta';
+
+      if (badge) {
+        const bd = document.createElement('span');
+        bd.className = `due-badge ${badge.cls}`;
+        bd.textContent = badge.label;
+        meta.appendChild(bd);
+      }
+
+      if (todo.due_at) {
+        const dateStr = new Date(todo.due_at).toLocaleString('tr-TR', {
+          day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit'
+        });
+        const dateLbl = document.createElement('span');
+        dateLbl.className = 'remind-badge'; dateLbl.textContent = dateStr;
+        meta.appendChild(dateLbl);
+      }
+
+      if (todo.remind_before_minutes) {
+        const rl = document.createElement('span');
+        rl.className = 'remind-badge'; rl.textContent = `🔔 ${remindLabel(todo.remind_before_minutes)}`;
+        meta.appendChild(rl);
+      }
+
+      if (todo.due_at) {
+        const icsBtn = document.createElement('button');
+        icsBtn.className = 'ics-btn'; icsBtn.textContent = '📅 Takvime ekle';
+        icsBtn.addEventListener('click', () => downloadIcs(todo));
+        meta.appendChild(icsBtn);
+      }
+
+      body.append(span);
+      if (meta.children.length) body.append(meta);
+
+      const actions = document.createElement('div');
+      actions.className = 'todo-actions';
 
       const editBtn = document.createElement('button');
-      editBtn.className = 'edit-btn';
-      editBtn.title     = 'Düzenle';
-      editBtn.innerHTML = '&#x270E;';
-      editBtn.addEventListener('click', () => startEdit(li, todo));
+      editBtn.className = 'edit-btn'; editBtn.title = 'Düzenle'; editBtn.innerHTML = '&#x270E;';
+      editBtn.addEventListener('click', () => openModal(todo));
 
       const deleteBtn = document.createElement('button');
-      deleteBtn.className = 'delete-btn';
-      deleteBtn.title     = 'Sil';
-      deleteBtn.innerHTML = '&#x2715;';
+      deleteBtn.className = 'delete-btn'; deleteBtn.title = 'Sil'; deleteBtn.innerHTML = '&#x2715;';
       deleteBtn.addEventListener('click', () => deleteTodo(todo.id));
 
-      li.append(checkbox, span, editBtn, deleteBtn);
+      actions.append(editBtn, deleteBtn);
+      li.append(checkbox, body, actions);
       list.appendChild(li);
     });
   }
@@ -306,17 +407,11 @@ filterBtns.forEach(btn => {
 
 // ── Bootstrap ─────────────────────────────────────────────
 (async () => {
-  // Önce e-posta onay linki hash'ini kontrol et
   const hash = parseHash();
   if (hash?.access_token) {
     const ok = await handleHashCallback(hash);
     if (ok) { startApp(); return; }
   }
-
-  // Mevcut oturumu yükle
   const stored = loadSession();
-  if (stored?.access_token) {
-    session = stored;
-    startApp();
-  }
+  if (stored?.access_token) { session = stored; startApp(); }
 })();
