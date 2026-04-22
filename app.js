@@ -466,13 +466,6 @@ function render() {
         meta.appendChild(rl);
       }
 
-      if (todo.due_at) {
-        const icsBtn = document.createElement('button');
-        icsBtn.className = 'ics-btn'; icsBtn.textContent = '📅 Takvime ekle';
-        icsBtn.addEventListener('click', () => downloadIcs(todo));
-        meta.appendChild(icsBtn);
-      }
-
       body.append(span);
       if (meta.children.length) body.append(meta);
 
