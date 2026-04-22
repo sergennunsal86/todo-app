@@ -1,6 +1,11 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+};
+
 const SUPABASE_URL     = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const GOOGLE_CLIENT_ID = Deno.env.get('GOOGLE_CLIENT_ID')!;
@@ -50,6 +55,9 @@ async function getAccessToken(userId: string): Promise<string | null> {
 }
 
 serve(async (req) => {
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders });
+  }
   try {
     const { todo_id, action } = await req.json() as { todo_id: string; action: 'create' | 'update' | 'delete' };
 
@@ -59,25 +67,25 @@ serve(async (req) => {
       .eq('id', todo_id)
       .single();
 
-    if (!todo) return new Response(JSON.stringify({ error: 'Todo not found' }), { status: 404 });
+    if (!todo) return new Response(JSON.stringify({ error: 'Todo not found' }), { status: 404, headers: corsHeaders });
 
     const token = await getAccessToken(todo.user_id);
     if (!token) {
-      return new Response(JSON.stringify({ ok: false, reason: 'no_google_token' }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ ok: false, reason: 'no_google_token' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
     const calendarBase = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
     const authHeader = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 
     if (action === 'delete') {
-      if (!todo.google_event_id) return new Response(JSON.stringify({ ok: true }));
+      if (!todo.google_event_id) return new Response(JSON.stringify({ ok: true }), { headers: corsHeaders });
       await fetch(`${calendarBase}/${todo.google_event_id}`, { method: 'DELETE', headers: authHeader });
       await supabase.from('todos').update({ google_event_id: null }).eq('id', todo_id);
-      return new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ ok: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
     if (!todo.due_at) {
-      return new Response(JSON.stringify({ ok: false, reason: 'no_due_at' }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ ok: false, reason: 'no_due_at' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
     const start = new Date(todo.due_at);
@@ -109,7 +117,7 @@ serve(async (req) => {
       console.error('Calendar API error:', calData);
     }
 
-    return new Response(JSON.stringify({ ok: res.ok, event_id: calData.id }), { headers: { 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ ok: res.ok, event_id: calData.id }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (e) {
     console.error(e);
     return new Response(JSON.stringify({ error: String(e) }), { status: 500, headers: { 'Content-Type': 'application/json' } });

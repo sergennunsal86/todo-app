@@ -23,14 +23,16 @@ function fromB64url(s: string): Uint8Array {
 }
 
 async function buildVapidJwt(endpoint: string): Promise<string> {
-  const origin   = new URL(endpoint).origin;
-  const header   = { typ: 'JWT', alg: 'ES256' };
-  const payload  = { aud: origin, exp: Math.floor(Date.now() / 1000) + 43200, sub: VAPID_SUBJECT };
-  const encode   = (o: unknown) => b64url(new TextEncoder().encode(JSON.stringify(o)));
+  const origin  = new URL(endpoint).origin;
+  const header  = { typ: 'JWT', alg: 'ES256' };
+  const payload = { aud: origin, exp: Math.floor(Date.now() / 1000) + 43200, sub: VAPID_SUBJECT };
+  const encode  = (o: unknown) => b64url(new TextEncoder().encode(JSON.stringify(o)));
   const sigInput = `${encode(header)}.${encode(payload)}`;
 
+  // VAPID_PRIVATE is already PKCS8-DER encoded in base64url
+  const pkcs8 = fromB64url(VAPID_PRIVATE);
   const privKey = await crypto.subtle.importKey(
-    'pkcs8', fromB64url(VAPID_PRIVATE),
+    'pkcs8', pkcs8.buffer as ArrayBuffer,
     { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']
   );
   const sig = await crypto.subtle.sign(
@@ -41,23 +43,21 @@ async function buildVapidJwt(endpoint: string): Promise<string> {
   return `${sigInput}.${b64url(sig)}`;
 }
 
-async function sendPush(sub: { endpoint: string; p256dh: string; auth: string }, payload: object) {
-  const jwt = await buildVapidJwt(sub.endpoint);
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'Authorization': `vapid t=${jwt},k=${VAPID_PUBLIC}`,
-    'TTL': '86400',
-  };
-
-  // Encrypt payload using Web Push encryption (RFC 8291)
-  const body = JSON.stringify(payload);
-
-  // For simplicity: send unencrypted (content-encoding: aes128gcm requires full ECDH+HKDF)
-  // Production: use a library like web-push. Here we send without body and let notification use title from push event.
-  const res = await fetch(sub.endpoint, { method: 'POST', headers, body });
-  if (!res.ok && res.status !== 201) {
-    const text = await res.text();
-    console.error('Push failed:', res.status, text);
+async function sendPush(sub: { endpoint: string; p256dh: string; auth: string }, _payload: object) {
+  try {
+    const jwt = await buildVapidJwt(sub.endpoint);
+    const res = await fetch(sub.endpoint, {
+      method: 'POST',
+      headers: {
+        'Authorization': `vapid t=${jwt},k=${VAPID_PUBLIC}`,
+        'TTL': '86400',
+      },
+    });
+    if (!res.ok && res.status !== 201) {
+      console.error('Push failed:', res.status, await res.text());
+    }
+  } catch (e) {
+    console.error('Push error (VAPID):', String(e), 'privKeyLen:', VAPID_PRIVATE?.length);
   }
 }
 
@@ -89,10 +89,8 @@ serve(async () => {
   try {
     const now = new Date();
 
-    // Find todos where remind time has passed but reminders not yet sent
     const { data: todos, error } = await supabase.rpc('todos_due_for_reminder', { check_time: now.toISOString() });
     if (error) {
-      // Fallback: manual query
       const { data, error: err2 } = await supabase
         .from('todos')
         .select('id, text, due_at, remind_before_minutes, user_id, reminded_email, reminded_push')
@@ -123,7 +121,6 @@ serve(async () => {
 });
 
 async function processTodo(todo: { id: string; text: string; due_at: string; user_id: string; reminded_email: boolean; reminded_push: boolean }) {
-  // Get user email
   const { data: userData } = await supabase.auth.admin.getUserById(todo.user_id);
   const email = userData?.user?.email;
 
